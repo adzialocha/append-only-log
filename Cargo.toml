@@ -1,0 +1,10 @@
+[package]
+name = "append-only-log"
+version = "0.1.0"
+authors = ["Andreas Dzialocha <kontakt@andreasdzialocha.com>"]
+edition = "2018"
+
+[dependencies]
+ed25519-dalek = "0.9.1"
+sha2 = "0.8.0"
+rand = "0.6.5"
