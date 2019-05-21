@@ -1,20 +1,42 @@
-use blake2_rfc::blake2b::{blake2b, Blake2bResult};
+use std::hash::Hasher;
+use std::io::Cursor;
+
+use blake2_rfc::blake2b::Blake2b;
+use byteorder::{BigEndian, ReadBytesExt};
 use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature};
 use rand::rngs::OsRng;
 use sha2::Sha512;
+
+pub struct Blake2bHasher {
+    context: Blake2b,
+}
+
+impl Blake2bHasher {
+    pub fn new(public_key: &PublicKey) -> Self {
+        Self {
+            context: Blake2b::with_key(64, public_key.as_bytes()),
+        }
+    }
+}
+
+impl Hasher for Blake2bHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        self.context.update(bytes);
+    }
+
+    fn finish(&self) -> u64 {
+        let context_clone = self.context.clone();
+        let result = context_clone.finalize();
+
+        let mut cursor = Cursor::new(result.as_bytes());
+        cursor.read_u64::<BigEndian>().unwrap()
+    }
+}
 
 pub fn generate_keypair() -> Keypair {
   let mut cspring: OsRng = OsRng::new().unwrap();
 
   Keypair::generate::<Sha512, _>(&mut cspring)
-}
-
-pub fn hash_data(
-    public_key: &[u8],
-    data: &[u8],
-    length: usize
-) -> Blake2bResult {
-    blake2b(length, public_key, data)
 }
 
 pub fn sign_data(
@@ -35,18 +57,6 @@ pub fn verify_data(
     } else {
         Err(())
     }
-}
-
-#[test]
-fn can_hash_data() {
-    let length = 16;
-    let data = b"Hello, Test!";
-    let hash = hash_data(&[], data, length);
-    let wrong_hash = hash_data(&[1, 2, 3], data, length);
-
-    assert_eq!(hash.len(), length);
-    assert_eq!(hash.as_bytes(), &[103, 145, 101, 12, 173, 108, 196, 62, 21, 86, 47, 194, 99, 83, 53, 112]);
-    assert_ne!(hash.as_bytes(), wrong_hash.as_bytes());
 }
 
 #[test]

@@ -1,46 +1,86 @@
+use std::fmt;
+use std::hash::{Hash, Hasher};
+
+use byteorder::{BigEndian, WriteBytesExt};
 use ed25519_dalek::{Keypair, PublicKey, Signature};
 
 mod crypto;
 
-const HASH_LENGTH: usize = 64;
+fn generate_hash<H: Hash>(public_key: &PublicKey, value: &H) -> u64 {
+    let mut hasher = crypto::Blake2bHasher::new(&public_key);
+    value.hash(&mut hasher);
+    hasher.finish()
+}
 
-fn entry_as_bytes(
-    backlink: &Option<Vec<u8>>,
-    data: &[u8],
-    sequence_number: usize,
-) -> Vec<u8> {
-    let mut bytes = Vec::new();
+#[derive(Default, PartialEq, Eq)]
+struct LogEntry {
+    data: Vec<u8>,
+    id: u64,
+    id_previous: u64,
+    sequence_number: u64,
+    signature: Option<Signature>,
+}
 
-    match backlink {
-        Some(link) => {
-            bytes.append(&mut link.clone())
-        },
-        None => {},
+impl LogEntry {
+    fn new(id_previous: u64, data: Vec<u8>, sequence_number: u64) -> Self {
+        Self {
+            data,
+            id: 0,
+            id_previous,
+            sequence_number,
+            signature: None,
+        }
     }
 
-    bytes.append(&mut data.to_vec());
-    bytes.append(&mut sequence_number.to_be_bytes().to_vec());
+    /// Returns the entry as bytes, excluding the signature
+    fn as_bytes(&self) -> Vec<u8> {
+        let mut result = self.data.clone();
+        result.write_u64::<BigEndian>(self.id).unwrap();
+        result.write_u64::<BigEndian>(self.id_previous).unwrap();
+        result.write_u64::<BigEndian>(self.sequence_number).unwrap();
+        result
+    }
 
-    bytes
+    /// Generates a hash as an entry identifier and a signature
+    fn sign(&mut self, keypair: &Keypair) {
+        // Hash the entry itself and use this as its id
+        self.id = generate_hash(&keypair.public, self);
+
+        // Sign the entry and attach it to itself
+        let signature = crypto::sign_data(&keypair.public, &keypair.secret, &self.as_bytes());
+        self.signature = Some(signature);
+    }
+
+    /// Checks if the entries where written by the owner of that key
+    fn verify(&self, public_key: &PublicKey) -> bool {
+        match self.signature {
+            None => false,
+            Some(signature) => {
+                crypto::verify_data(&public_key, &self.as_bytes(), &signature)
+                    .is_err()
+            }
+        }
+    }
 }
 
-fn hash_entry(public_key: &PublicKey, entry: &LogEntry) -> Vec<u8> {
-    let bytes = entry_as_bytes(
-        &entry.backlink,
-        &entry.data,
-        entry.sequence_number
-    );
-
-    crypto::hash_data(public_key.as_bytes(), &bytes, HASH_LENGTH).as_bytes().to_vec()
+impl Hash for LogEntry {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id_previous.hash(state);
+        self.sequence_number.hash(state);
+    }
 }
 
-struct LogEntry {
-    backlink: Option<Vec<u8>>,
-    data: Vec<u8>,
-    sequence_number: usize,
-    signature: Signature,
+impl fmt::Display for LogEntry {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "LogEntry(id={}, id_previous={}, seq_num={}, data={:?})",
+            self.id, self.id_previous, self.sequence_number, self.data
+        )
+    }
 }
 
+#[derive(Default)]
 pub struct Log {
     entries: Vec<LogEntry>,
     keypair: Keypair,
@@ -56,43 +96,25 @@ impl Log {
 
     pub fn append(&mut self, data: &[u8]) {
         let sequence_number = self.len() + 1;
+        let mut id_previous = 0;
 
-        let backlink = match sequence_number {
-            1 => None,
-            _ => {
-                let previous_entry = self.entries.get( sequence_number - 2).unwrap();
+        if sequence_number > 1 {
+            let entry_previous = &self.entries[sequence_number - 2];
+            id_previous = generate_hash(&self.keypair.public, entry_previous);
+        }
 
-                let hashed_entry = hash_entry(
-                    &self.keypair.public,
-                    previous_entry
-                );
+        let mut entry_new = LogEntry::new(id_previous, data.to_vec(), sequence_number as u64);
+        entry_new.sign(&self.keypair);
 
-                Some(hashed_entry)
-            },
-        };
-
-        let encoded = entry_as_bytes(
-            &backlink,
-            &data,
-            sequence_number,
-        );
-
-        let signature = crypto::sign_data(
-            &self.keypair.public,
-            &self.keypair.secret,
-            &encoded,
-        );
-
-        self.entries.push(LogEntry {
-            backlink,
-            data: data.to_vec(),
-            sequence_number,
-            signature,
-        });
+        self.entries.push(entry_new);
     }
 
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     pub fn get(&self, index: usize) -> std::option::Option<Vec<u8>> {
@@ -109,40 +131,28 @@ impl Log {
         let mut sequence_number = 0;
 
         let has_invalid_entries = self.entries.iter().any(|entry| {
-            let backlink = entry.backlink.clone();
+            let id_previous = entry.id_previous.clone();
 
-            let encoded = entry_as_bytes(
-                &entry.backlink,
-                &entry.data,
-                entry.sequence_number,
-            );
-
-            // Verify backlink
+            // Regenerate hashes pointing at the previous entries
+            // and see if they are consistant with the log
             if sequence_number > 0 {
-                let previous_entry = self.entries.get(sequence_number - 1).unwrap();
+                let entry_previous = &self.entries[sequence_number - 1];
 
-                let hashed_entry = hash_entry(
-                    &self.keypair.public,
-                    previous_entry
-                );
+                let key_previous_check = generate_hash(&public_key, entry_previous);
 
-                if backlink.unwrap() != hashed_entry {
+                if key_previous_check != id_previous {
                     return true
                 }
             }
 
-            // Verify sequence number
+            // Check if the entries are numbered sequentially
             sequence_number += 1;
-            if sequence_number != entry.sequence_number {
+            if sequence_number as u64 != entry.sequence_number {
                 return true
             }
 
             // Verify signature
-            crypto::verify_data(
-                &public_key,
-                &encoded,
-                &entry.signature
-            ).is_err()
+            entry.verify(&public_key)
         });
 
         if has_invalid_entries {
@@ -161,10 +171,13 @@ mod log {
     fn get() {
         let mut log = Log::new();
 
+        assert!(log.is_empty());
+
         log.append(b"Hello, Test!");
         log.append(b"1, 2, 3");
 
         assert_eq!(log.len(), 2);
+        assert_eq!(log.is_empty(), false);
 
         assert_eq!(log.get(0), Some(b"Hello, Test!".to_vec()));
         assert_eq!(log.get(1), Some(b"1, 2, 3".to_vec()));
