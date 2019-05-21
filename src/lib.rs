@@ -57,7 +57,7 @@ impl LogEntry {
             None => false,
             Some(signature) => {
                 crypto::verify_data(&public_key, &self.as_bytes(), &signature)
-                    .is_err()
+                    .is_ok()
             }
         }
     }
@@ -137,10 +137,9 @@ impl Log {
             // and see if they are consistant with the log
             if sequence_number > 0 {
                 let entry_previous = &self.entries[sequence_number - 1];
+                let id_previous_check = generate_hash(&public_key, entry_previous);
 
-                let key_previous_check = generate_hash(&public_key, entry_previous);
-
-                if key_previous_check != id_previous {
+                if id_previous_check != id_previous {
                     return true
                 }
             }
@@ -151,8 +150,8 @@ impl Log {
                 return true
             }
 
-            // Verify signature
-            entry.verify(&public_key)
+            // Verify signature, check if its invalid
+            !entry.verify(&public_key)
         });
 
         if has_invalid_entries {
