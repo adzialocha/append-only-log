@@ -1,5 +1,6 @@
 use std::hash::Hasher;
 use std::io::Cursor;
+use std::result;
 
 use blake2_rfc::blake2b::Blake2b;
 use byteorder::{BigEndian, ReadBytesExt};
@@ -12,9 +13,9 @@ pub struct Blake2bHasher {
 }
 
 impl Blake2bHasher {
-    pub fn new(public_key: &PublicKey) -> Self {
+    pub fn new() -> Self {
         Self {
-            context: Blake2b::with_key(64, public_key.as_bytes()),
+            context: Blake2b::new(64),
         }
     }
 }
@@ -51,7 +52,7 @@ pub fn verify_data(
   public_key: &PublicKey,
   data: &[u8],
   signature: &Signature,
-) -> std::result::Result<(), ()> {
+) -> result::Result<(), ()> {
     if public_key.verify::<Sha512>(data, signature).is_ok() {
         Ok(())
     } else {
