@@ -124,18 +124,12 @@ impl Log {
 
     /// Returns the stored data at this position of the log.
     pub fn get(&self, index: usize) -> option::Option<Vec<u8>> {
-        match self.entries.get(index) {
-            Some(entry) => Some(entry.content.data.clone()),
-            None => None,
-        }
+        self.entries.get(index).map(|entry| entry.content.data.clone())
     }
 
     /// Returns the hash of an entry of the log.
     pub fn hash(&self, index: usize) -> option::Option<u64> {
-        match self.entries.get(index) {
-            Some(entry) => Some(generate_hash(entry)),
-            None => None,
-        }
+        self.entries.get(index).map(|entry| generate_hash(entry))
     }
 
     /// Checks if order of all entries and theire signatures are correct.
