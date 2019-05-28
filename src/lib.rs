@@ -1,8 +1,7 @@
-//! Simple append-only-log data structure
+//! Simple append-only log structure
 
 use std::hash::{Hash, Hasher};
 use std::option;
-use std::result;
 
 use byteorder::{BigEndian, WriteBytesExt};
 use ed25519_dalek::{Keypair, PublicKey, Signature};
@@ -24,7 +23,6 @@ struct LogEntryContent {
 }
 
 impl LogEntryContent {
-    // Returns a new LogEntryContent
     fn new(hash_previous: u64, data: Vec<u8>, sequence_number: u64) -> Self {
         Self {
             data,
@@ -33,7 +31,6 @@ impl LogEntryContent {
         }
     }
 
-    // Convert this content to bytes
     fn to_bytes(&self) -> Vec<u8> {
         let mut result = self.data.clone();
         result.write_u64::<BigEndian>(self.hash_previous).unwrap();
@@ -49,10 +46,7 @@ struct LogEntry {
 }
 
 impl LogEntry {
-    // Returns new LogEntry instance with content and
-    // signature of it.
     fn sign(content: LogEntryContent, keypair: &Keypair) -> Self {
-        // Sign the content and attach it to itself
         let signature = crypto::sign_data(&keypair.public, &keypair.secret, &content.to_bytes());
 
         Self {
@@ -61,7 +55,6 @@ impl LogEntry {
         }
     }
 
-    // Checks if the entries where written by the owner of that key.
     fn verify(&self, public_key: &PublicKey) -> bool {
         crypto::verify_data(&public_key, &self.content.to_bytes(), &self.signature)
             .is_ok()
@@ -76,7 +69,7 @@ impl Hash for LogEntry {
     }
 }
 
-/// Append-only-log data-structure.
+/// Append-only log data-structure.
 #[derive(Default)]
 pub struct Log {
     entries: Vec<LogEntry>,
@@ -84,7 +77,7 @@ pub struct Log {
 }
 
 impl Log {
-    /// Returns new instance of append-only-log.
+    /// Returns new instance of append-only log.
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -92,7 +85,7 @@ impl Log {
         }
     }
 
-    /// Add a new entry to the log with arbitrary data.
+    /// Append new entry to the log with arbitrary data.
     pub fn append(&mut self, data: &[u8]) {
         // Define sequence number
         let sequence_number = self.len() + 1;
@@ -133,19 +126,16 @@ impl Log {
     }
 
     /// Checks if order of all entries and theire signatures are correct.
-    pub fn verify(
-        &self,
-        public_key: &PublicKey,
-    ) -> result::Result<(), ()> {
-        let mut sequence_number = 0;
+    pub fn verify(&self, public_key: &PublicKey) -> bool {
+        let mut sequence_number = 1;
 
         let has_invalid_entries = self.entries.iter().any(|entry| {
             let hash_previous = entry.content.hash_previous.clone();
 
             // Regenerate hashes pointing at the previous entries
             // and see if they are consistant with the log
-            if sequence_number > 0 {
-                let entry_previous = &self.entries[sequence_number - 1];
+            if sequence_number > 1 {
+                let entry_previous = &self.entries[sequence_number - 2];
                 let id_previous_check = generate_hash(entry_previous);
 
                 if id_previous_check != hash_previous {
@@ -154,20 +144,17 @@ impl Log {
             }
 
             // Check if the entries are numbered sequentially
-            sequence_number += 1;
             if sequence_number as u64 != entry.content.sequence_number {
                 return true
             }
+
+            sequence_number += 1;
 
             // Verify signature, check if its invalid
             !entry.verify(&public_key)
         });
 
-        if has_invalid_entries {
-            Err(())
-        } else {
-            Ok(())
-        }
+        !has_invalid_entries
     }
 }
 
@@ -226,7 +213,7 @@ mod log {
         log.append(b"Test");
         log.append(b"1, 2, 3");
 
-        log.verify(&public_key).unwrap();
-        log.verify(&wrong_keypair.public).unwrap_err();
+        log.verify(&public_key);
+        log.verify(&wrong_keypair.public);
     }
 }
